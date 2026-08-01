@@ -1,82 +1,182 @@
 "use client";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabaseBrowser } from "../../lib/supabaseClient";
+import { Wordmark, Banner, Spinner } from "../../components/ui";
 
-const T = {
-  orchid: "#B98CDB", orchidDeep: "#8B5FAE", surface: "#1F1A26",
-  line: "#332B3D", text: "#EDE9F1", muted: "#948D9F",
-};
+// Supabase devuelve los errores en inglés; los pasamos a algo legible.
+function traducir(msg = "") {
+  const m = msg.toLowerCase();
+  if (m.includes("invalid login credentials")) return "Email o contraseña incorrectos.";
+  if (m.includes("email not confirmed")) return "Todavía no confirmaste tu email. Revisá tu casilla.";
+  if (m.includes("user already registered") || m.includes("already been registered"))
+    return "Ese email ya tiene una cuenta. Probá entrar.";
+  if (m.includes("password should be at least"))
+    return "La contraseña necesita al menos 6 caracteres.";
+  if (m.includes("unable to validate email") || m.includes("invalid email"))
+    return "Ese email no parece válido.";
+  if (m.includes("rate limit") || m.includes("too many"))
+    return "Demasiados intentos seguidos. Esperá un minuto.";
+  if (m.includes("fetch") || m.includes("network"))
+    return "Sin conexión con el servidor. Revisá tu internet.";
+  return msg || "Algo salió mal. Intentá de nuevo.";
+}
 
 export default function Login() {
   const router = useRouter();
   const supabase = supabaseBrowser();
+
   const [modo, setModo] = useState("entrar");
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [nombre, setNombre] = useState("");
   const [error, setError] = useState("");
+  const [aviso, setAviso] = useState("");
   const [cargando, setCargando] = useState(false);
 
-  async function entrar(e) {
-    e.preventDefault();
-    setError(""); setCargando(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
-    setCargando(false);
-    if (error) return setError(error.message);
-    router.replace("/");
+  const registrando = modo === "registrar";
+
+  function cambiarModo() {
+    setModo(registrando ? "entrar" : "registrar");
+    setError("");
+    setAviso("");
   }
 
-  async function registrar(e) {
+  async function enviar(e) {
     e.preventDefault();
-    setError(""); setCargando(true);
-    const { data, error } = await supabase.auth.signUp({ email, password: pass });
-    if (error) { setCargando(false); return setError(error.message); }
-    // crea el perfil asociado (rol alumno por defecto; el profesor se promueve luego desde Supabase)
-    if (data.user) {
-      await supabase.from("perfiles").insert({ id: data.user.id, nombre, rol: "alumno" });
+    setError("");
+    setAviso("");
+    setCargando(true);
+
+    try {
+      if (registrando) {
+        // el nombre viaja en la metadata: el trigger handle_new_user() lo usa
+        // para crear la fila en `perfiles` del lado del servidor.
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password: pass,
+          options: { data: { nombre: nombre.trim() } },
+        });
+        if (error) throw error;
+
+        if (!data.session) {
+          // el proyecto pide confirmación por email
+          setAviso("Cuenta creada. Confirmá tu email y después entrá.");
+          setModo("entrar");
+          setPass("");
+          return;
+        }
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({
+          email,
+          password: pass,
+        });
+        if (error) throw error;
+      }
+
+      router.replace("/");
+    } catch (err) {
+      setError(traducir(err?.message));
+    } finally {
+      setCargando(false);
     }
-    setCargando(false);
-    router.replace("/");
   }
-
-  const inputStyle = {
-    width: "100%", padding: "10px 12px", borderRadius: 10, marginBottom: 12,
-    background: "#28212F", border: `1px solid ${T.line}`, color: T.text, fontSize: 14, boxSizing: "border-box",
-  };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh", padding: 20 }}>
-      <form onSubmit={modo === "entrar" ? entrar : registrar} style={{
-        width: 340, background: T.surface, border: `1px solid ${T.line}`, borderRadius: 18, padding: 26,
-      }}>
-        <div style={{ fontSize: 20, marginBottom: 18 }}>
-          Núcleo <span style={{ color: T.orchid }}>Gym</span>
+    <div className="center-screen">
+      <form
+        onSubmit={enviar}
+        className="card fade-up"
+        style={{ width: "100%", maxWidth: 372 }}
+        noValidate
+      >
+        <div style={{ marginBottom: 6 }}>
+          <Wordmark size={23} />
         </div>
+        <p className="muted small" style={{ margin: "0 0 20px" }}>
+          {registrando
+            ? "Creá tu cuenta para empezar a entrenar."
+            : "Entrá para ver tu rutina de hoy."}
+        </p>
 
-        {modo === "registrar" && (
-          <input style={inputStyle} placeholder="Nombre y apellido" value={nombre}
-            onChange={e => setNombre(e.target.value)} required />
-        )}
-        <input style={inputStyle} type="email" placeholder="Email" value={email}
-          onChange={e => setEmail(e.target.value)} required />
-        <input style={inputStyle} type="password" placeholder="Contraseña" value={pass}
-          onChange={e => setPass(e.target.value)} required minLength={6} />
+        <div className="stack" style={{ gap: 13 }}>
+          {registrando && (
+            <div className="field">
+              <label className="label" htmlFor="nombre">
+                Nombre y apellido
+              </label>
+              <input
+                id="nombre"
+                className="input"
+                placeholder="Ana Gómez"
+                value={nombre}
+                onChange={(e) => setNombre(e.target.value)}
+                autoComplete="name"
+                required
+              />
+            </div>
+          )}
 
-        {error && <div style={{ color: "#D97A7A", fontSize: 13, marginBottom: 10 }}>{error}</div>}
+          <div className="field">
+            <label className="label" htmlFor="email">
+              Email
+            </label>
+            <input
+              id="email"
+              className="input"
+              type="email"
+              inputMode="email"
+              placeholder="vos@email.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              required
+            />
+          </div>
 
-        <button type="submit" disabled={cargando} style={{
-          width: "100%", padding: "11px", borderRadius: 10, border: "none",
-          background: T.orchid, color: "#1A1520", fontWeight: 700, cursor: "pointer", marginBottom: 10,
-        }}>
-          {cargando ? "Un momento..." : modo === "entrar" ? "Entrar" : "Crear cuenta"}
-        </button>
+          <div className="field">
+            <label className="label" htmlFor="pass">
+              Contraseña
+            </label>
+            <input
+              id="pass"
+              className="input"
+              type="password"
+              placeholder="Mínimo 6 caracteres"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              autoComplete={registrando ? "new-password" : "current-password"}
+              required
+              minLength={6}
+            />
+          </div>
 
-        <div
-          onClick={() => setModo(modo === "entrar" ? "registrar" : "entrar")}
-          style={{ color: T.muted, fontSize: 13, textAlign: "center", cursor: "pointer" }}
-        >
-          {modo === "entrar" ? "¿Sos nuevo? Creá tu cuenta" : "¿Ya tenés cuenta? Entrá"}
+          <Banner tipo="err">{error}</Banner>
+          <Banner tipo="ok">{aviso}</Banner>
+
+          <button
+            type="submit"
+            className="btn btn-primary btn-block"
+            disabled={cargando}
+            style={{ marginTop: 3 }}
+          >
+            {cargando && <Spinner />}
+            {cargando
+              ? "Un momento…"
+              : registrando
+                ? "Crear cuenta"
+                : "Entrar"}
+          </button>
+
+          <button
+            type="button"
+            onClick={cambiarModo}
+            className="btn btn-ghost btn-block"
+            style={{ fontWeight: 500, fontSize: 13 }}
+          >
+            {registrando ? "¿Ya tenés cuenta? Entrá" : "¿Sos nuevo? Creá tu cuenta"}
+          </button>
         </div>
       </form>
     </div>
